@@ -1,0 +1,16 @@
+{
+  "codename": "u22",
+  "ttf_path": "\\assets\\Ubuntu-M.ttf",
+  "bin_path": "\\assets\\ui_font_u22.bin",
+  "c_path": "\\assets\\ui_font_u22.c",
+  "cfg_path": "\\assets\\ui_font_u22.fcfg",
+  "size": 22,
+  "bpp": 1,
+  "letters": 0,
+  "ranges": [
+    "0x20-0x3F"
+  ],
+  "symbols": "",
+  "customparams": "--no-compress --no-prefilter",
+  "uploaded": false
+}
