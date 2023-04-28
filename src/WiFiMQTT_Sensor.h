@@ -73,7 +73,7 @@ protected:
 		doc = deviceDoc;
 		doc["name"] = "Temperature";
 		doc["device_class"] = "temperature";
-		doc["unit_of_measurement"] = "ºC";
+		doc["unit_of_measurement"] = "°C";
 		doc["value_template"] = "{{ value_json.temperature }}";
 		doc["unique_id"] = TEMPERATURE_SENSOR_UNIQUE_ID;
 

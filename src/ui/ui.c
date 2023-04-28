@@ -38,15 +38,12 @@ void ui_Screen0_screen_init(void)
     lv_obj_clear_flag(ui_Screen0, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
 
     ui_connecting = lv_img_create(ui_Screen0);
-    lv_img_set_src(ui_connecting, &ui_img_wifi_16x16_png);
-    lv_obj_set_width(ui_connecting, LV_SIZE_CONTENT);   /// 1
-    lv_obj_set_height(ui_connecting, LV_SIZE_CONTENT);    /// 1
+    lv_img_set_src(ui_connecting, &ui_img_dk_32x32_png);
+    lv_obj_set_width(ui_connecting, LV_SIZE_CONTENT);   /// 50
+    lv_obj_set_height(ui_connecting, LV_SIZE_CONTENT);    /// 50
     lv_obj_set_align(ui_connecting, LV_ALIGN_CENTER);
     lv_obj_add_flag(ui_connecting, LV_OBJ_FLAG_ADV_HITTEST);     /// Flags
     lv_obj_clear_flag(ui_connecting, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
-    lv_img_set_zoom(ui_connecting, 1024);
-    lv_obj_set_style_img_recolor(ui_connecting, lv_color_hex(0xFF0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_img_recolor_opa(ui_connecting, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
 }
 void ui_Screen1_screen_init(void)

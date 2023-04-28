@@ -4,6 +4,11 @@
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
 # User-specific files
+*.filters
+*.vcxproj
+*.vcxitems
+*.sln
+*.user
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -344,4 +349,3 @@ MigrationBackup/
 
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
-

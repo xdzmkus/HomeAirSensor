@@ -60,37 +60,34 @@ volatile bool checkCO2 = false;
 volatile bool checkRTC = false;
 volatile bool doPublish = false;
 
-#include "src/tft.h"
-
 // *** TFT-1.4 *** 128 x 128 ***//
 
-#include <Adafruit_ST7735.h>
-
-#define TFT_RST   -1
-#define TFT_CS    D4
-#define TFT_DC    D3
-
-// OPTION 1 (recommended) is to use the HARDWARE SPI pins, which are unique
-// to each board and not reassignable. For Wemos D1 mini:
-// MOSI = pin D7 and SCLK = pin D5.
-// This is the fastest mode of operation and is required if
-// using the breakout board's microSD card.
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-// OPTION 2 lets you interface the display using ANY TWO or THREE PINS,
-// tradeoff being that performance is not as fast as hardware SPI above.
-//#define TFT_MOSI 11  // Data out
-//#define TFT_SCLK 13  // Clock out
-//Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
-#include <lvgl.h>
-
-/*Change to your screen resolution*/
 static const uint16_t screenWidth = 128;
 static const uint16_t screenHeight = 128;
 
+#include <Arduino_GFX_Library.h>
+
+#define TFT_MISO GFX_NOT_DEFINED
+#define TFT_MOSI D7
+#define TFT_SCLK D5
+#define TFT_CS   D4   // Chip select control pin
+#define TFT_DC   D3   // Data Command control pin
+#define TFT_RST  GFX_NOT_DEFINED // Reset pin (could connect to RST pin)
+
+const uint8_t rotation = 0;
+
+/* More data bus class: https://github.com/moononournation/Arduino_GFX/wiki/Data-Bus-Class */
+Arduino_DataBus* bus = new Arduino_ESP8266SPI(TFT_DC /* DC */, TFT_CS /* CS */);
+
+/* More display class: https://github.com/moononournation/Arduino_GFX/wiki/Display-Class */
+Arduino_GFX* gfx = new Arduino_ST7735(bus, TFT_RST /* RST */, rotation /* rotation */, false /* IPS */, screenWidth /* width */, screenHeight /* height */, 2 /* col offset 1 */, 3 /* row offset 1 */, 2 /* col offset 2 */, 1 /* row offset 2 */);
+
+#include <lvgl.h>
+
 static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf[screenWidth * 10];
+static lv_color_t* disp_draw_buf;
+
+#include "src/tft.h"
 
 /* Display flushing */
 static void tft_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
@@ -98,10 +95,11 @@ static void tft_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_
 	uint32_t w = (area->x2 - area->x1 + 1);
 	uint32_t h = (area->y2 - area->y1 + 1);
 
-	tft.startWrite();
-	tft.setAddrWindow(area->x1, area->y1, w, h);
-	tft.writePixels((uint16_t*)&color_p->full, w * h);
-	tft.endWrite();
+#if (LV_COLOR_16_SWAP != 0)
+	gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t*)&color_p->full, w, h);
+#else
+	gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t*)&color_p->full, w, h);
+#endif
 
 	lv_disp_flush_ready(disp);
 }
@@ -109,15 +107,23 @@ static void tft_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_
 void tft_init()
 {
 	// TFT init
-	tft.initR(INITR_144GREENTAB);	// Init ST7735R chip, green tab
-	tft.cp437(true);
-	tft.setRotation(0);
-	tft.setTextWrap(false);			// Allow text to run off right edge
-	tft.fillScreen(ST7735_BLACK);
+	gfx->begin();
+	gfx->fillScreen(WHITE);
 
 	lv_init();
 
-	lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * 10);
+#ifdef ESP32
+	disp_draw_buf = (lv_color_t*)heap_caps_malloc(sizeof(lv_color_t) * screenWidth * screenHeight / 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
+	disp_draw_buf = (lv_color_t*)malloc(sizeof(lv_color_t) * screenWidth * 5);
+#endif
+	if (!disp_draw_buf)
+	{
+		Serial.println("LVGL disp_draw_buf allocate failed!");
+		ESP.restart();
+	}
+
+	lv_disp_draw_buf_init(&draw_buf, disp_draw_buf, NULL, screenWidth * 5);
 
 	/*Initialize the display*/
 	static lv_disp_drv_t disp_drv;
@@ -220,9 +226,8 @@ uint32_t getNTPTime()
 		SerialDebug::log(LOG_LEVEL::DEBUG, F("Send NTP request"));
 
 		delay(1000);
-	}
-	while (!udp.parsePacket() && --attemps > 0);
-	
+	} while (!udp.parsePacket() && --attemps > 0);
+
 	if (attemps == 0) return 0;
 
 	// We've received a packet, read the data from it
@@ -242,7 +247,7 @@ uint32_t getNTPTime()
 	// Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
 	const uint32_t seventyYears = 2208988800UL;
 	// subtract seventy years:
-	uint32_t epoch = secsSince1900 - seventyYears + 3*3600; // UTC+3
+	uint32_t epoch = secsSince1900 - seventyYears + 3 * 3600; // UTC+3
 
 	return epoch;
 }
@@ -359,7 +364,7 @@ void setup()
 	{
 		checkCO2 = true;
 		tickerCO2.attach(CO2_CHECK_INTERVAL, callback_checkCO2);
-	}	
+	}
 
 	ui_change_screen();
 }
@@ -384,12 +389,12 @@ void loop()
 		else
 		{
 			checkCO2 = false;
-			
-			TFT_COLOR color;
 
-			if (CO2 < 800) color = TFT_COLOR::GREEN;
-			else if (CO2 < 1500) color = TFT_COLOR::YELLOW;
-			else color = TFT_COLOR::RED;
+			uint32_t color;
+
+			if (CO2 < 800) color = TFT_COLOR_GREEN;
+			else if (CO2 < 1500) color = TFT_COLOR_YELLOW;
+			else color = TFT_COLOR_RED;
 
 			char co2[8] = { 0 };
 			sprintf(co2, "%d", CO2);
@@ -410,7 +415,7 @@ void loop()
 			displayedTime = now;
 
 			SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Device time: ")) + displayedTime.day() + "/" + displayedTime.month() + "/" + displayedTime.year() + " " + displayedTime.hour() + ":" + displayedTime.minute() + ":" + displayedTime.second());
-		
+
 			char newTimeString[32] = { 0 };
 			sprintf(newTimeString, "%hu/%02hu  %02hu:%02hu", displayedTime.day(), displayedTime.month(), displayedTime.hour(), displayedTime.minute());
 			ui_updateTime(newTimeString);
@@ -421,8 +426,8 @@ void loop()
 	{
 		checkSensor = false;
 
-		temperature = sensor.readTemperature();
-		humidity = sensor.readHumidity();
+		temperature = sensor.readTemperature() - 2.5;
+		humidity = sensor.readHumidity() + 8;
 		pressure = sensor.readPressure() / 100.0F;
 		altitude = sensor.readAltitude(SEALEVELPRESSURE_HPA);
 
@@ -442,9 +447,9 @@ void loop()
 	if (doPublish)
 	{
 		doPublish = false;
-		
+
 		bool wifi = wifiMqtt.publishState(CO2, temperature, humidity, pressure);
 
-		ui_updateWiFi(wifi ? TFT_COLOR::GREEN : TFT_COLOR::RED);
+		ui_updateWiFi(wifi ? TFT_COLOR_GREEN : TFT_COLOR_RED);
 	}
 }

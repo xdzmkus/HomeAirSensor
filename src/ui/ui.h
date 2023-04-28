@@ -35,6 +35,7 @@ extern lv_obj_t * ui_co2Img;
 extern lv_obj_t * ui_co2Val;
 
 
+LV_IMG_DECLARE(ui_img_dk_32x32_png);    // assets\DK_32x32.png
 LV_IMG_DECLARE(ui_img_wifi_16x16_png);    // assets\wifi_16x16.png
 LV_IMG_DECLARE(ui_img_temp_24x32_png);    // assets\temp_24x32.png
 LV_IMG_DECLARE(ui_img_hum_30x30_png);    // assets\hum_30x30.png

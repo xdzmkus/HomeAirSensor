@@ -62,7 +62,7 @@ void ui_updateHumidity(const char* hum)
 	lv_msg_send(MSG_HUMIDITY_CHANGED, hum);
 }
 
-void ui_updateCO2(const char* co2, enum TFT_COLOR co2_color)
+void ui_updateCO2(const char* co2, uint32_t co2_color)
 {
 	lv_msg_send(MSG_CO2_CHANGED, co2);
 
@@ -74,7 +74,7 @@ void ui_updateTime(const char* displayedTime)
 	lv_msg_send(MSG_TIME_CHANGED, displayedTime);
 }
 
-void ui_updateWiFi(enum TFT_COLOR wifi_color)
+void ui_updateWiFi(uint32_t wifi_color)
 {
 	lv_obj_set_style_img_recolor(ui_wifi, lv_color_hex(wifi_color), LV_PART_MAIN | LV_STATE_DEFAULT);
 }
