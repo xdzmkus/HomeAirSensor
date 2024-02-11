@@ -1,12 +1,14 @@
-#define SERIAL_DEBUG
-#include <SerialDebug.h>
+#include <SerialDebug.hpp>
 
-#include "src/WiFiMQTT_Sensor.h"
-WiFiMQTT_Sensor wifiMqtt;
+//#define DEBUG_DRAW
+#include <GFX.h>
+
+#include <ArduinoDebounceButton.h>
+
+using namespace ArduLibs;
 
 #define BTN_PIN D0
 
-#include <ArduinoDebounceButton.h>
 ArduinoDebounceButton btn(BTN_PIN, BUTTON_CONNECTED::VCC, BUTTON_NORMAL::OPEN);
 
 // MHZ-19 - CO2 sensor
@@ -20,6 +22,16 @@ ArduinoDebounceButton btn(BTN_PIN, BUTTON_CONNECTED::VCC, BUTTON_NORMAL::OPEN);
 MHZ19 myMHZ19;
 SoftwareSerial mySerial(RX_PIN, TX_PIN);
 int CO2 = 0;
+
+enum class CO2_STATE
+{
+	UNKNOWN,
+	GOOD,
+	NOTOK,
+	BAD
+};
+
+CO2_STATE co2State = CO2_STATE::UNKNOWN;
 
 // I2C modules:
 // D1 - SCL; 
@@ -42,28 +54,11 @@ float humidity = 0;
 float pressure = 0;
 float altitude = 0;
 
-#include <Ticker.h>
-Ticker tickerSensor;
-Ticker tickerCO2;
-Ticker tickerRTC;
-Ticker tickerMQTT;
-
-// Interrupts ---------------------------/
-
-#define SENSOR_CHECK_INTERVAL	5.0F    // 5 seconds
-#define CO2_CHECK_INTERVAL		60.0F   // 60 seconds
-#define RTC_CHECK_INTERVAL		1000    // 500 ms
-#define MQTT_PUBLISH_INTERVAL	30.0F   // 30 seconds
-
-volatile bool checkSensor = false;
-volatile bool checkCO2 = false;
-volatile bool checkRTC = false;
-volatile bool doPublish = false;
-
 // *** TFT-1.4 *** 128 x 128 ***//
 
 static const uint16_t screenWidth = 128;
 static const uint16_t screenHeight = 128;
+static const uint8_t rotation = 0;
 
 #include <Arduino_GFX_Library.h>
 
@@ -74,67 +69,67 @@ static const uint16_t screenHeight = 128;
 #define TFT_DC   D3   // Data Command control pin
 #define TFT_RST  GFX_NOT_DEFINED // Reset pin (could connect to RST pin)
 
-const uint8_t rotation = 0;
-
 /* More data bus class: https://github.com/moononournation/Arduino_GFX/wiki/Data-Bus-Class */
 Arduino_DataBus* bus = new Arduino_ESP8266SPI(TFT_DC /* DC */, TFT_CS /* CS */);
 
 /* More display class: https://github.com/moononournation/Arduino_GFX/wiki/Display-Class */
 Arduino_GFX* gfx = new Arduino_ST7735(bus, TFT_RST /* RST */, rotation /* rotation */, false /* IPS */, screenWidth /* width */, screenHeight /* height */, 2 /* col offset 1 */, 3 /* row offset 1 */, 2 /* col offset 2 */, 1 /* row offset 2 */);
 
-#include <lvgl.h>
+const unsigned int color = BLACK;
 
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t* disp_draw_buf;
+#define TEMP_X 28
+#define TEMP_Y 10
+#define TEMP_W 100
+#define TEMP_H 35
 
-#include "src/tft.h"
+GFX_Float lcdTemp = GFX_Float<Arduino_GFX>(temperature, 1, 4, gfx, color, color, TEMP_X, TEMP_Y, TEMP_W, TEMP_H);
 
-/* Display flushing */
-static void tft_disp_flush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
-{
-	uint32_t w = (area->x2 - area->x1 + 1);
-	uint32_t h = (area->y2 - area->y1 + 1);
+#define HUM_X 35
+#define HUM_Y 48
+#define HUM_W 63
+#define HUM_H 30
 
-#if (LV_COLOR_16_SWAP != 0)
-	gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t*)&color_p->full, w, h);
-#else
-	gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t*)&color_p->full, w, h);
-#endif
+GFX_FloatEx lcdHum = GFX_FloatEx<Arduino_GFX>(humidity, 1, 3, "%", 2, gfx, color, color, HUM_X, HUM_Y, HUM_W, HUM_H);
 
-	lv_disp_flush_ready(disp);
-}
+#define CO2_X 50
+#define CO2_Y 70
+#define CO2_W 78
+#define CO2_H 50
 
-void tft_init()
-{
-	// TFT init
-	gfx->begin();
-	gfx->fillScreen(WHITE);
+GFX_Integer lcdCO2 = GFX_Integer<Arduino_GFX>(CO2, 3, gfx, color, color, CO2_X, CO2_Y, CO2_W, CO2_H);
 
-	lv_init();
+#define TIME_X 50
+#define TIME_Y 110
+#define TIME_W 78
+#define TIME_H 18
 
-#ifdef ESP32
-	disp_draw_buf = (lv_color_t*)heap_caps_malloc(sizeof(lv_color_t) * screenWidth * screenHeight / 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-#else
-	disp_draw_buf = (lv_color_t*)malloc(sizeof(lv_color_t) * screenWidth * 5);
-#endif
-	if (!disp_draw_buf)
-	{
-		Serial.println("LVGL disp_draw_buf allocate failed!");
-		ESP.restart();
-	}
+GFX_Text lcdTime = GFX_Text<Arduino_GFX>("HomeAirSensor", 1, gfx, color, color, TIME_X, TIME_Y, TIME_W, TIME_H);
 
-	lv_disp_draw_buf_init(&draw_buf, disp_draw_buf, NULL, screenWidth * 5);
+#define WIFI_X 6
+#define WIFI_Y 52
 
-	/*Initialize the display*/
-	static lv_disp_drv_t disp_drv;
-	lv_disp_drv_init(&disp_drv);
-	/*Change the following line to your display resolution*/
-	disp_drv.hor_res = screenWidth;
-	disp_drv.ver_res = screenHeight;
-	disp_drv.flush_cb = tft_disp_flush;
-	disp_drv.draw_buf = &draw_buf;
-	lv_disp_drv_register(&disp_drv);
-}
+#include "src/gui_images.h"
+#include "src/WiFiMQTT_Sensor.h"
+
+WiFiMQTT_Sensor wifiMqtt;
+
+// Interrupts ---------------------------/
+
+#include <Ticker.h>
+Ticker tickerSensor;
+Ticker tickerCO2;
+Ticker tickerRTC;
+Ticker tickerMQTT;
+
+#define SENSOR_CHECK_INTERVAL	5.0F    // 5 seconds
+#define CO2_CHECK_INTERVAL		60.0F   // 60 seconds
+#define RTC_CHECK_INTERVAL		1000    // 1 second
+#define MQTT_PUBLISH_INTERVAL	30.0F   // 30 seconds
+
+volatile bool checkSensor = false;
+volatile bool checkCO2 = false;
+volatile bool checkRTC = false;
+volatile bool doPublish = false;
 
 void callback_checkSensor()
 {
@@ -161,13 +156,13 @@ void handleButtonEvent(const DebounceButton* button, BUTTON_EVENT eventType)
 	switch (eventType)
 	{
 	case BUTTON_EVENT::Clicked:
-		SerialDebug::log(LOG_LEVEL::DEBUG, F("Clicked"));
-		SerialDebug::log(LOG_LEVEL::INFO, F("Publish state..."));
+		SerialDebug::println(LOG_LEVEL::DEBUG, F("Clicked"));
+		SerialDebug::println(LOG_LEVEL::INFO, F("Publish state..."));
 		doPublish = true;
 		break;
 	case BUTTON_EVENT::LongPressed:
-		SerialDebug::log(LOG_LEVEL::DEBUG, F("LongPressed"));
-		SerialDebug::log(LOG_LEVEL::WARN, F("Rebooting..."));
+		SerialDebug::println(LOG_LEVEL::DEBUG, F("LongPressed"));
+		SerialDebug::println(LOG_LEVEL::WARN, F("Rebooting..."));
 		ESP.restart();
 		break;
 	default:
@@ -175,7 +170,6 @@ void handleButtonEvent(const DebounceButton* button, BUTTON_EVENT eventType)
 	}
 }
 
-// -------------------------------------------------------------------------------------------------------------
 uint32_t getNTPTime()
 {
 	uint8_t attemps = 5;
@@ -223,7 +217,7 @@ uint32_t getNTPTime()
 		udp.write(packetBuffer, NTP_PACKET_SIZE);
 		udp.endPacket();
 
-		SerialDebug::log(LOG_LEVEL::DEBUG, F("Send NTP request"));
+		SerialDebug::println(LOG_LEVEL::DEBUG, F("Send NTP request"));
 
 		delay(1000);
 	} while (!udp.parsePacket() && --attemps > 0);
@@ -241,7 +235,7 @@ uint32_t getNTPTime()
 	// combine the four bytes (two words) into a long integer
 	// this is NTP time (seconds since Jan 1 1900):
 	uint32_t secsSince1900 = highWord << 16 | lowWord;
-	SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Seconds since Jan 1 1900 = ")) + secsSince1900);
+	SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Seconds since Jan 1 1900 = ")) + secsSince1900);
 
 	// now convert NTP time into everyday time
 	// Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
@@ -252,57 +246,118 @@ uint32_t getNTPTime()
 	return epoch;
 }
 
+void gui_updateScreen()
+{	
+	if (CO2 < 800 && co2State != CO2_STATE::GOOD)
+	{
+		co2State = CO2_STATE::GOOD;
+		gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)GREEN_BG_128x128, GREEN_BG_128X128_WIDTH, GREEN_BG_128X128_HEIGHT);
+		
+		lcdTemp.setColors(GREEN, color);
+		lcdTemp.show();
+
+		lcdHum.setColors(GREEN, color);
+		lcdHum.show();
+
+		lcdCO2.setColors(GREEN, color);
+		lcdCO2.show();
+
+		lcdTime.setColors(GREEN, color);
+		lcdTime.show();
+	}
+	else if (CO2 >= 800 && CO2 < 1500 && co2State != CO2_STATE::NOTOK)
+	{
+		co2State = CO2_STATE::NOTOK;
+		gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)YELLOW_BG_128x128, YELLOW_BG_128X128_WIDTH, YELLOW_BG_128X128_HEIGHT);
+
+		lcdTemp.setColors(YELLOW, color);
+		lcdTemp.show();
+
+		lcdHum.setColors(YELLOW, color);
+		lcdHum.show();
+
+		lcdCO2.setColors(YELLOW, color);
+		lcdCO2.show();
+		
+		lcdTime.setColors(YELLOW, color);
+		lcdTime.show();
+	}
+	else if (CO2 >= 1500 && co2State != CO2_STATE::BAD)
+	{
+		co2State = CO2_STATE::BAD;
+		gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)RED_BG_128x128, RED_BG_128X128_WIDTH, RED_BG_128X128_HEIGHT);
+
+		lcdTemp.setColors(RED, color);
+		lcdTemp.show();
+
+		lcdHum.setColors(RED, color);
+		lcdHum.show();
+
+		lcdCO2.setColors(RED, color);
+		lcdCO2.show();
+		
+		lcdTime.setColors(RED, color);
+		lcdTime.show();
+	}
+}
+
 
 bool setup_RTC()
 {
-	SerialDebug::log(LOG_LEVEL::INFO, F("RTC init..."));
+	SerialDebug::println(LOG_LEVEL::INFO, F("RTC init..."));
 
 	if (!rtc.begin())
 	{
-		SerialDebug::log(LOG_LEVEL::ERROR, F("Couldn't find RTC"));
+		SerialDebug::println(LOG_LEVEL::ERROR, F("Couldn't find RTC"));
 		return false;
 	}
 
 	uint32_t unixtime = getNTPTime();
 
-	SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Unix time since Jan 1 1970 = ")) + unixtime);
+	SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Unix time since Jan 1 1970 = ")) + String(unixtime));
 
 	if (unixtime != 0)
 	{
 		rtc.adjust(unixtime);
 	}
 
+	SerialDebug::println(LOG_LEVEL::INFO, F("RTC done."));
+
 	return true;
 }
 
 bool setup_Sensor()
 {
-	SerialDebug::log(LOG_LEVEL::INFO, F("BME280 init..."));
+	SerialDebug::println(LOG_LEVEL::INFO, F("BME280 init..."));
 
 	unsigned status = sensor.begin(0x76);
 
 	if (!status)
 	{
-		SerialDebug::log(LOG_LEVEL::ERROR, F("Could not find a valid sensor, check wiring, address, sensor ID!"));
-		SerialDebug::log(LOG_LEVEL::INFO, String(F("SensorID was: 0x")) + String(sensor.sensorID(), 16));
-		SerialDebug::log(LOG_LEVEL::INFO, F("   ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n"));
-		SerialDebug::log(LOG_LEVEL::INFO, F("   ID of 0x56-0x58 represents a BMP 280,\n"));
-		SerialDebug::log(LOG_LEVEL::INFO, F("   ID of 0x60 represents a BME 280.\n"));
-		SerialDebug::log(LOG_LEVEL::INFO, F("   ID of 0x61 represents a BME 680.\n"));
+		SerialDebug::println(LOG_LEVEL::ERROR, F("Could not find a valid sensor, check wiring, address, sensor ID!"));
+		SerialDebug::println(LOG_LEVEL::INFO, String(F("SensorID was: 0x")) + String(sensor.sensorID(), 16));
+		SerialDebug::println(LOG_LEVEL::INFO, F("   ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n"));
+		SerialDebug::println(LOG_LEVEL::INFO, F("   ID of 0x56-0x58 represents a BMP 280,\n"));
+		SerialDebug::println(LOG_LEVEL::INFO, F("   ID of 0x60 represents a BME 280.\n"));
+		SerialDebug::println(LOG_LEVEL::INFO, F("   ID of 0x61 represents a BME 680.\n"));
 		return false;
 	}
+
+	SerialDebug::println(LOG_LEVEL::INFO, F("BME280 done."));
 
 	return true;
 }
 
 bool setup_MHZ19()
 {
-	SerialDebug::log(LOG_LEVEL::INFO, F("MHZ-19 init..."));
+	SerialDebug::println(LOG_LEVEL::INFO, F("MHZ-19 init..."));
 
 	mySerial.begin(BAUDRATE);
 
 	myMHZ19.begin(mySerial);                                // Important, Pass your Stream reference 
 	myMHZ19.autoCalibration(false);                         // Turn auto calibration OFF
+
+	SerialDebug::println(LOG_LEVEL::INFO, F("MHZ-19 done."));
 
 	return myMHZ19.errorCode;
 }
@@ -311,11 +366,12 @@ void setup()
 {
 	SerialDebug::begin(115200);
 
-	SerialDebug::log(LOG_LEVEL::WARN, String(F("Device restarted")));
+	SerialDebug::println(LOG_LEVEL::WARN, String(F("Device started")));
 
-	tft_init();
-
-	ui_show();
+	// TFT init
+	gfx->begin();
+	gfx->setTextWrap(false);
+	gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)DK_LOGO_128x128, DK_LOGO_128X128_WIDTH, DK_LOGO_128X128_HEIGHT);
 
 	btn.initPin();
 
@@ -326,7 +382,7 @@ void setup()
 
 	btn.setEventHandler(handleButtonEvent);
 
-	if (f_setupMode) SerialDebug::log(LOG_LEVEL::WARN, F("BUTTON PRESSED - RECONFIGURE WIFI"));
+	if (f_setupMode) SerialDebug::println(LOG_LEVEL::WARN, F("BUTTON PRESSED - RECONFIGURE WIFI"));
 
 	wifiMqtt.init(f_setupMode);
 
@@ -334,7 +390,7 @@ void setup()
 
 	if (!setup_RTC())
 	{
-		SerialDebug::log(LOG_LEVEL::ERROR, String(F("RTC initialization failed")));
+		SerialDebug::println(LOG_LEVEL::ERROR, String(F("RTC disabled!")));
 	}
 	else
 	{
@@ -343,12 +399,12 @@ void setup()
 
 		DateTime curTime = rtc.now();
 
-		SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Device time: ")) + curTime.day() + "/" + curTime.month() + "/" + curTime.year() + " " + curTime.hour() + ":" + curTime.minute() + ":" + curTime.second());
+		SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Device time: ")) + curTime.day() + "/" + curTime.month() + "/" + curTime.year() + " " + curTime.hour() + ":" + curTime.minute() + ":" + curTime.second());
 	}
 
 	if (!setup_Sensor())
 	{
-		SerialDebug::log(LOG_LEVEL::ERROR, String(F("Sensor initialization failed")));
+		SerialDebug::println(LOG_LEVEL::ERROR, String(F("BME disabled!")));
 	}
 	else
 	{
@@ -358,7 +414,7 @@ void setup()
 
 	if (!setup_MHZ19())
 	{
-		SerialDebug::log(LOG_LEVEL::ERROR, String(F("MHZ19 initialization failed")));
+		SerialDebug::println(LOG_LEVEL::ERROR, String(F("MHZ19 disabled!")));
 	}
 	else
 	{
@@ -366,13 +422,16 @@ void setup()
 		tickerCO2.attach(CO2_CHECK_INTERVAL, callback_checkCO2);
 	}
 
-	ui_change_screen();
+	lcdTemp.setDecimalSize(3);
+	lcdHum.setDecimalSize(1);
+
+	gui_updateScreen();
+
+	SerialDebug::println(LOG_LEVEL::INFO, String(F("Device ready")));
 }
 
 void loop()
 {
-	lv_timer_handler(); /* let the GUI do its work */
-
 	btn.check();
 
 	wifiMqtt.process();
@@ -383,25 +442,18 @@ void loop()
 
 		if (CO2 == 0)
 		{
-			SerialDebug::log(LOG_LEVEL::ERROR, String(F("MHZ19 read failed: ")) + myMHZ19.errorCode);
+			SerialDebug::println(LOG_LEVEL::ERROR, String(F("MHZ19 read failed: ")) + myMHZ19.errorCode);
 			myMHZ19.verify();
 		}
 		else
 		{
 			checkCO2 = false;
 
-			uint32_t color;
+			SerialDebug::println(LOG_LEVEL::DEBUG, String(F("CO2: ")) + CO2);
 
-			if (CO2 < 800) color = TFT_COLOR_GREEN;
-			else if (CO2 < 1500) color = TFT_COLOR_YELLOW;
-			else color = TFT_COLOR_RED;
+			lcdCO2.updateValue(CO2);
 
-			char co2[8] = { 0 };
-			sprintf(co2, "%d", CO2);
-
-			ui_updateCO2(co2, color);     // show new CO2 value
-
-			SerialDebug::log(LOG_LEVEL::DEBUG, String(F("CO2: ")) + co2);
+			gui_updateScreen();
 		}
 	}
 
@@ -414,11 +466,11 @@ void loop()
 		{
 			displayedTime = now;
 
-			SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Device time: ")) + displayedTime.day() + "/" + displayedTime.month() + "/" + displayedTime.year() + " " + displayedTime.hour() + ":" + displayedTime.minute() + ":" + displayedTime.second());
-
 			char newTimeString[32] = { 0 };
-			sprintf(newTimeString, "%hu/%02hu  %02hu:%02hu", displayedTime.day(), displayedTime.month(), displayedTime.hour(), displayedTime.minute());
-			ui_updateTime(newTimeString);
+			sprintf(newTimeString, "%hu/%02hu %02hu:%02hu", displayedTime.day(), displayedTime.month(), displayedTime.hour(), displayedTime.minute());
+			SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Device time: ")) + String(newTimeString));
+
+			lcdTime.updateText(newTimeString);
 		}
 	}
 
@@ -433,23 +485,28 @@ void loop()
 
 		char temp[8] = { 0 };
 		sprintf(temp, "%.1f", temperature);
-		ui_updateTemperature(temp);
+		SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Temperature: ")) + temp);
 
-		SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Temperature: ")) + temp);
+		lcdTemp.updateValue(temperature);
 
 		char hum[8] = { 0 };
 		sprintf(hum, "%.1f", humidity);
-		ui_updateHumidity(hum);
+		SerialDebug::println(LOG_LEVEL::DEBUG, String(F("Humidity: ")) + hum);
 
-		SerialDebug::log(LOG_LEVEL::DEBUG, String(F("Humidity: ")) + hum);
+		lcdHum.updateValue(humidity);
 	}
 
 	if (doPublish)
 	{
 		doPublish = false;
 
-		bool wifi = wifiMqtt.publishState(CO2, temperature, humidity, pressure);
-
-		ui_updateWiFi(wifi ? TFT_COLOR_GREEN : TFT_COLOR_RED);
+		if (wifiMqtt.publishState(CO2, temperature, humidity, pressure))
+		{
+			gfx->draw16bitRGBBitmap(WIFI_X, WIFI_Y, (uint16_t*)WIFI_16x16, WIFI_16x16_WIDTH, WIFI_16x16_HEIGHT);
+		}
+		else
+		{
+			gfx->fillRect(WIFI_X, WIFI_Y, WIFI_16x16_WIDTH, WIFI_16x16_HEIGHT, WHITE);
+		}
 	}
 }

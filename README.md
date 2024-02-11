@@ -1,9 +1,15 @@
 # HomeAirSensor
-1.4" LCD Air quality monitor (BME280, RTC_DS1307, MHZ19) as a homeassistant MQTT Sensor integration with discovery
+1.4" LCD ESP8266 Air quality monitor (BME280, RTC_DS1307, MHZ19) as a homeassistant MQTT Sensor integration with discovery
 
-![Screenshot](home_air_sensor.jpg)
+![Screenshot](images/home_air_sensor.jpg)
 
 ## Depends on libraries:
  - xdzmkus/ArduLibs
- - lvgl
- - others...
+ - MH-Z19                                 
+ - RTClib                                             
+ - Adafruit BME280 Library                             
+ - GFX Library for Arduino 
+ - WiFiManager
+ - PubSubClient
+ - ArduinoJson                                         
+ - Ticker
